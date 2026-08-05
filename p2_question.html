@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assignment: CookieNotes Logic</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* [STYLES REMAIN UNCHANGED FOR STUDENT CONVENIENCE] */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+        .note-item { transition: all 0.2s ease; }
+        .note-item:hover { transform: translateX(4px); }
+        .note-item.active { border-left: 4px solid #3b82f6; background-color: #eff6ff; }
+        #editor-content { min-height: 60vh; outline: none; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 h-screen overflow-hidden font-sans">
+
+    <!-- 
+        ASSIGNMENT INSTRUCTIONS:
+        1. Implement the 'Persistence' object. 
+           - You must serialize the notes array into a string.
+           - You must Encode it (Base64 recommended) to store in a cookie safely.
+           - Implement the load function to read and decode the cookie.
+        
+        2. Implement 'AppState.getFilteredNotes()'.
+           - It must filter by 'active' vs 'trash' view modes.
+           - It must filter by the search query.
+           - It must SORT results: Pinned notes at the top, then sorted by Updated date.
+
+        3. Implement 'AppState.trashNote' and 'AppState.togglePin'.
+           - Handle the boolean flags on the note objects.
+
+        4. Wire up the Input Event Listeners at the bottom of the script.
+           - The app currently does not react when you type in the editor. Fix this.
+    -->
+
+    <div class="flex h-full max-w-7xl mx-auto bg-white shadow-2xl overflow-hidden relative">
+        <!-- Sidebar -->
+        <aside class="w-1/3 min-w-[300px] bg-gray-50 border-r border-gray-200 flex flex-col z-10">
+            <div class="p-4 border-b border-gray-200 bg-white">
+                <div class="flex justify-between items-center mb-4">
+                    <h1 class="text-xl font-bold text-gray-700 flex items-center gap-2">
+                        <!-- Icon -->
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" /></svg>
+                        CookieNotes (Student Ver.)
+                    </h1>
+                    <button id="btn-add-note" class="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm transition-colors" title="New Note">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+                    </button>
+                </div>
+
+                <!-- Search Bar -->
+                <div class="relative mb-3">
+                    <input type="text" id="search-input" placeholder="Search title & content..." 
+                        class="w-full pl-9 pr-3 py-2 bg-gray-100 border border-transparent focus:bg-white focus:border-blue-400 rounded-md text-sm transition-all outline-none">
+                    <svg class="w-4 h-4 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                </div>
+
+                <!-- View Toggle -->
+                <div class="flex bg-gray-200 p-1 rounded-lg">
+                    <button id="view-notes" class="flex-1 py-1 text-xs font-semibold rounded-md bg-white shadow-sm text-gray-800 transition-all">My Notes</button>
+                    <button id="view-trash" class="flex-1 py-1 text-xs font-semibold rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-all">Trash</button>
+                </div>
+            </div>
+
+            <div id="notes-list" class="flex-1 overflow-y-auto p-2 space-y-2">
+                <div class="text-center mt-10 text-gray-400 text-sm">Loading notes...</div>
+            </div>
+
+            <!-- Footer -->
+            <div class="p-3 border-t border-gray-200 bg-gray-100 text-xs">
+                <div class="flex justify-between mb-1">
+                    <span class="font-medium text-gray-600">Cookie Storage</span>
+                    <span id="storage-status" class="text-gray-500">0%</span>
+                </div>
+                <div class="w-full bg-gray-300 rounded-full h-1.5 overflow-hidden">
+                    <div id="storage-bar" class="bg-green-500 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                </div>
+                <div id="storage-warning" class="hidden text-red-500 mt-1 font-bold">Storage Full! Text may be truncated.</div>
+            </div>
+        </aside>
+
+        <!-- Main Editor -->
+        <main class="flex-1 flex flex-col bg-white relative">
+            <div id="empty-state" class="absolute inset-0 z-20 bg-white flex flex-col items-center justify-center text-gray-400 hidden">
+                <p class="text-lg">Select a note to view or create a new one.</p>
+            </div>
+
+            <!-- Toolbar -->
+            <div id="editor-toolbar" class="h-16 border-b border-gray-100 flex items-center justify-between px-6 bg-white">
+                <div class="text-xs text-gray-400 font-mono" id="last-saved">Last saved: Never</div>
+                <div class="flex items-center gap-2">
+                    <button id="btn-pin" class="p-2 text-gray-400 hover:text-yellow-500 hover:bg-yellow-50 rounded-full transition-colors" title="Pin Note">
+                        <!-- Pin Icon -->
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" /></svg>
+                    </button>
+                    <button id="btn-trash" class="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="Delete Note">
+                        <!-- Trash Icon -->
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                    </button>
+                    <!-- Restore/Delete Perm buttons -->
+                    <button id="btn-restore" class="hidden px-3 py-1 bg-green-100 text-green-700 text-sm font-medium rounded hover:bg-green-200">Restore</button>
+                    <button id="btn-perm-delete" class="hidden px-3 py-1 bg-red-100 text-red-700 text-sm font-medium rounded hover:bg-red-200">Delete Forever</button>
+                </div>
+            </div>
+
+            <!-- Inputs -->
+            <div class="flex-1 overflow-y-auto p-8 relative">
+                <input type="text" id="note-title" placeholder="Note Title" class="w-full text-3xl font-bold text-gray-800 placeholder-gray-300 border-none outline-none bg-transparent mb-4">
+                <textarea id="note-content" placeholder="Start typing..." class="w-full h-full resize-none border-none outline-none text-gray-600 text-lg leading-relaxed bg-transparent font-serif"></textarea>
+            </div>
+
+            <div class="h-8 border-t border-gray-100 px-6 flex items-center justify-end text-xs text-gray-400 bg-gray-50">
+                <span id="word-count">0 words</span>
+            </div>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script>
+        /**
+         * TODO SECTION 1: PERSISTENCE
+         * Implement the save and load functions using document.cookie.
+         */
+        const Persistence = {
+            COOKIE_NAME: 'cn_data_v1',
+            MAX_SIZE: 4096,
+
+            save: function(data) {
+                try {
+                    
+                    // TODO: 1. Convert 'data' (array of objects) into a JSON string
+                    // TODO: 2. Encode that string (Base64) to ensure cookie safety. (Hint: btoa + encodeURIComponent)
+                    const encodedData = btoa(encodeURIComponent(JSON.stringify(data)));
+                    // TODO: 3. Check the size. If > 4096 bytes, return { success: false, size: size }
+                    const size = encodedData.length;
+                    if (size > Persistence.MAX_SIZE){
+                        return {success : false , size : size };
+                    } 
+                    // TODO: 4. Set document.cookie with the name, value, and expiry.
+                    const expiryDate = new Date();
+                    expiryDate.setTime(expiryDate.getTime() + (30*24*60*60*1000)); // 1 month expiry
+                    document.cookie = `${Persistence.COOKIE_NAME}=${encodedData};expires=${expiryDate.toUTCString()};path=/`;
+                    
+                    //console.log("Persistence.save called (Not implemented yet)");
+                    return { success: true, size: size }; // Placeholder
+                } catch (e) {
+                    console.error("Save failed", e);
+                    return { success: false, size: 0 };
+                }
+            },
+
+            load: function() {
+                // TODO: 1. Read document.cookie and extract the value for COOKIE_NAME
+                const cookieValue = document.cookie.split(';').find(row => row.trim().startsWith(Persistence.COOKIE_NAME + '='));
+                // TODO: 2. If found, Decode (Base64) and Parse (JSON) it back into an array.
+                if (cookieValue){
+                    const decodedData = JSON.parse(decodeURIComponent(atob(cookieValue.split('=')[1])));
+                    return decodedData;
+                }
+                // TODO: 3. Return the array of notes.
+                
+                //console.log("Persistence.load called (Not implemented yet)");
+                return []; // Placeholder return
+            }
+        };
+
+        const AppState = {
+            notes: [],
+            activeNoteId: null,
+            viewMode: 'active', // 'active' or 'trash'
+            searchQuery: '',
+
+            init() {
+                this.notes = Persistence.load();
+                if (this.notes.length === 0) {
+                    this.createNote("Welcome Student", "Implement the logic to make this app work!");
+                }
+                this.refreshUI();
+            },
+
+            /**
+             * TODO SECTION 2: FILTERING & SORTING
+             * This function should return a subset of this.notes based on the current state.
+             */
+            getFilteredNotes() {
+                let filtered = this.notes.filter(note => {
+                    // TODO: Filter logic
+                    if (this.viewMode === 'active' && note.deleted) return false;
+                    // 1. If viewMode is 'active', only show notes where deleted === false
+                    if (this.viewMode === 'trash' && !note.deleted) return false;
+                    // 2. If viewMode is 'trash', only show notes where deleted === true
+                    if (this.searchQuery){
+                        const searchLower = this.searchQuery.toLowerCase();
+                        if(note.title.toLowerCase().includes(searchLower) || note.content.toLowerCase().includes(searchLower)){
+                            return true;
+                        }
+                        else {
+                            return false;
+                        }
+                    }
+                    // 3. If searchQuery is not empty, check if title or content includes the query (case insensitive)
+                    
+                    return true; // currently returns everything
+                });
+                // TODO: Sorting logic
+                filtered.sort((a,b) =>{
+
+                // Return a sorted copy of the filtered array.
+                if (a.pinned && !b.pinned) {
+                    return -1; // a goes before b
+                }
+                else if (!a.pinned && b.pinned){
+                    return 1; //b goes before a
+                }
+                // Priority 1: Pinned notes go first.
+                else {
+                    if (a.updated > b.updated){
+                        return -1; //a goes before b
+                    }
+                    else if (a.updated === b.updated){
+                        return 0; //no change
+                    }
+                    else {
+                        return 1; // b goes before a
+                    }
+                }
+                // Priority 2: Sort by 'updated' timestamp (newest first).
+
+                })
+
+                return filtered; 
+            },
+
+            getActiveNote() {
+                return this.notes.find(n => n.id === this.activeNoteId) || null;
+            },
+
+            createNote(title = "", content = "") {
+                const newNote = {
+                    id: Date.now().toString(36) + Math.random().toString(36).substr(2),
+                    title: title,
+                    content: content,
+                    created: Date.now(),
+                    updated: Date.now(),
+                    pinned: false,
+                    deleted: false
+                };
+                this.notes.push(newNote);
+                this.activeNoteId = newNote.id;
+                this.viewMode = 'active'; 
+                this.save();
+                this.refreshUI();
+            },
+
+            updateActiveNote(updates) {
+                const note = this.getActiveNote();
+                if (!note) return;
+
+                Object.assign(note, updates);
+                note.updated = Date.now();
+                
+                this.save();
+                Render.updateListItem(note); 
+                Render.updateStatus();
+            },
+
+            /**
+             * TODO SECTION 3: STATE ACTIONS
+             */
+            togglePin(id) {
+                
+                const idmatch = this.notes.find(note => note.id == id)
+                // TODO: Find the note by ID
+                if(idmatch){
+                    idmatch.pinned = !idmatch.pinned
+                    // TODO: Flip the 'pinned' boolean
+                    idmatch.updated = Date.now()
+                    // TODO: Update the 'updated' timestamp
+                    this.save()
+                    this.refreshUI()
+                    // TODO: Call this.save() and this.refreshUI()
+                }
+                console.log("Toggle Pin ID:", id);
+            },
+
+            trashNote(id) {
+                const idmatch = this.notes.find(note => note.id == id)
+                // TODO: Find the note by ID
+                if(idmatch){
+                    idmatch.deleted = true
+                    // TODO: Set 'deleted' to true
+                    idmatch.pinned = false
+                    // TODO: Set 'pinned' to false (items in trash shouldn't be pinned)
+                    if(idmatch.id == this.activeNoteId){
+                        this.activeNoteId = null
+                    }
+                    // TODO: If the deleted note was the active one, set activeNoteId to null
+                    idmatch.updated = Date.now()
+                    this.save()
+                    this.refreshUI()
+                    // TODO: Call this.save() and this.refreshUI()
+                }  
+                console.log("Trash ID:", id);
+            },
+
+            restoreNote(id) {
+                const note = this.notes.find(n => n.id === id);
+                if (note) {
+                    note.deleted = false;
+                    note.updated = Date.now();
+                    this.save();
+                    this.refreshUI();
+                }
+            },
+
+            permDelete(id) {
+                if(!confirm("Permanently delete this note?")) return;
+                this.notes = this.notes.filter(n => n.id !== id);
+                if (this.activeNoteId === id) this.activeNoteId = null;
+                this.save();
+                this.refreshUI();
+            },
+
+            save() {
+                const result = Persistence.save(this.notes);
+                Render.updateStorageMeter(result.size);
+            },
+
+            refreshUI() {
+                Render.renderList();
+                Render.renderEditor();
+            }
+        };
+
+        const Render = {
+            els: {
+                list: document.getElementById('notes-list'),
+                title: document.getElementById('note-title'),
+                content: document.getElementById('note-content'),
+                emptyState: document.getElementById('empty-state'),
+                btnPin: document.getElementById('btn-pin'),
+                btnTrash: document.getElementById('btn-trash'),
+                btnRestore: document.getElementById('btn-restore'),
+                btnPermDelete: document.getElementById('btn-perm-delete'),
+                wordCount: document.getElementById('word-count'),
+                lastSaved: document.getElementById('last-saved'),
+                storageBar: document.getElementById('storage-bar'),
+                storageStatus: document.getElementById('storage-status'),
+                storageWarn: document.getElementById('storage-warning'),
+                viewNotes: document.getElementById('view-notes'),
+                viewTrash: document.getElementById('view-trash')
+            },
+
+            renderList() {
+                const notes = AppState.getFilteredNotes();
+                this.els.list.innerHTML = '';
+
+                if (notes.length === 0) {
+                    this.els.list.innerHTML = `<div class="text-center mt-10 text-gray-400 text-sm italic">
+                        ${AppState.searchQuery ? 'No matching notes found.' : 'No notes available.'}
+                    </div>`;
+                    return;
+                }
+
+                notes.forEach(note => {
+                    const el = document.createElement('div');
+                    el.className = `note-item p-3 mb-2 rounded-lg cursor-pointer border border-gray-100 bg-white hover:shadow-md relative group ${note.id === AppState.activeNoteId ? 'active' : ''}`;
+                    el.dataset.id = note.id;
+                    
+                    const titleText = note.title.trim() || 'Untitled Note';
+                    const contentPrev = note.content.slice(0, 60).replace(/\n/g, ' ') || 'No content';
+                    const dateStr = new Date(note.updated).toLocaleDateString(undefined, { month:'short', day:'numeric' });
+
+                    el.innerHTML = `
+                        <div class="flex justify-between items-start mb-1">
+                            <h3 class="font-bold text-gray-700 truncate w-3/4">${titleText}</h3>
+                            ${note.pinned ? `<svg class="w-4 h-4 text-yellow-500 fill-current" viewBox="0 0 24 24"><path d="M16 12V4H17V2H7V4H8V12L5 17V19H10.5V22H13.5V19H19V17L16 12Z" /></svg>` : `<span class="text-xs text-gray-400">${dateStr}</span>`}
+                        </div>
+                        <p class="text-xs text-gray-500 truncate h-4">${contentPrev}</p>
+                    `;
+
+                    el.onclick = () => {
+                        AppState.activeNoteId = note.id;
+                        AppState.refreshUI();
+                    };
+
+                    this.els.list.appendChild(el);
+                });
+            },
+
+            updateListItem(note) {
+                const el = document.querySelector(`.note-item[data-id="${note.id}"]`);
+                if (el) {
+                    const titleEl = el.querySelector('h3');
+                    const prevEl = el.querySelector('p');
+                    if(titleEl) titleEl.textContent = note.title || 'Untitled Note';
+                    if(prevEl) prevEl.textContent = note.content.slice(0, 60).replace(/\n/g, ' ') || 'No content';
+                }
+            },
+
+            renderEditor() {
+                const note = AppState.getActiveNote();
+                
+                // View Mode Styling
+                if (AppState.viewMode === 'trash') {
+                    this.els.viewNotes.classList.remove('bg-white', 'shadow-sm', 'text-gray-800');
+                    this.els.viewNotes.classList.add('text-gray-500');
+                    this.els.viewTrash.classList.add('bg-white', 'shadow-sm', 'text-red-600');
+                } else {
+                    this.els.viewTrash.classList.remove('bg-white', 'shadow-sm', 'text-red-600');
+                    this.els.viewNotes.classList.add('bg-white', 'shadow-sm', 'text-gray-800');
+                }
+
+                if (!note) {
+                    this.els.emptyState.classList.remove('hidden');
+                    return;
+                }
+                
+                this.els.emptyState.classList.add('hidden');
+
+                if (document.activeElement !== this.els.title) this.els.title.value = note.title;
+                if (document.activeElement !== this.els.content) this.els.content.value = note.content;
+
+                const count = note.content.trim() === '' ? 0 : note.content.trim().split(/\s+/).length;
+                this.els.wordCount.textContent = `${count} word${count !== 1 ? 's' : ''}`;
+
+                if (note.deleted) {
+                    this.els.title.disabled = true;
+                    this.els.content.disabled = true;
+                    this.els.title.classList.add('opacity-50');
+                    this.els.content.classList.add('opacity-50');
+                    
+                    this.els.btnPin.classList.add('hidden');
+                    this.els.btnTrash.classList.add('hidden');
+                    this.els.btnRestore.classList.remove('hidden');
+                    this.els.btnPermDelete.classList.remove('hidden');
+                } else {
+                    this.els.title.disabled = false;
+                    this.els.content.disabled = false;
+                    this.els.title.classList.remove('opacity-50');
+                    this.els.content.classList.remove('opacity-50');
+
+                    this.els.btnPin.classList.remove('hidden');
+                    this.els.btnTrash.classList.remove('hidden');
+                    this.els.btnRestore.classList.add('hidden');
+                    this.els.btnPermDelete.classList.add('hidden');
+                    
+                    this.els.btnPin.className = note.pinned 
+                        ? "p-2 text-yellow-500 bg-yellow-50 rounded-full transition-colors"
+                        : "p-2 text-gray-400 hover:text-yellow-500 hover:bg-yellow-50 rounded-full transition-colors";
+                }
+            },
+
+            updateStatus() {
+                const now = new Date();
+                this.els.lastSaved.textContent = `Saved: ${now.toLocaleTimeString()}`;
+            },
+
+            updateStorageMeter(sizeBytes) {
+                const limit = Persistence.MAX_SIZE;
+                const percent = Math.min(100, Math.round((sizeBytes / limit) * 100));
+                
+                this.els.storageBar.style.width = `${percent}%`;
+                this.els.storageStatus.textContent = `${(sizeBytes/1024).toFixed(2)} KB`;
+
+                if (percent > 90) {
+                    this.els.storageBar.classList.remove('bg-green-500');
+                    this.els.storageBar.classList.add('bg-red-500');
+                } else {
+                    this.els.storageBar.className = 'bg-green-500 h-1.5 rounded-full transition-all duration-500';
+                }
+
+                if (percent >= 100) this.els.storageWarn.classList.remove('hidden');
+                else this.els.storageWarn.classList.add('hidden');
+            }
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            AppState.init();
+
+            document.getElementById('btn-add-note').addEventListener('click', () => {
+                AppState.createNote();
+            });
+
+            // TODO SECTION 4: INPUT EVENTS
+            // The following event listeners are MISSING.
+            document.getElementById('note-title').addEventListener('input' , ()=>{
+                const title = document.getElementById('note-title').value;
+                const content = document.getElementById('note-content').value;
+                 // 1. Get the values from the DOM elements.
+                AppState.updateActiveNote({title ,content});
+                // 2. Call AppState.updateActiveNote({ title, content }).
+                const wordCount = content.trim() === ""? 0: content.trim().split(/\s+/).length;
+                const wordCountElement = document.getElementById("word-count");
+                wordCountElement.textContent = wordCount || 0;
+                 // 3. Update the word count (optional, but good for UI).
+                
+            });
+            // Create an event listener for 'input' on both #note-title and #note-content.
+            // When input happens:
+            document.getElementById('note-content').addEventListener('input' , ()=>{
+                const title = document.getElementById('note-title').value;
+                const content = document.getElementById('note-content').value;
+                 // 1. Get the values from the DOM elements.
+                AppState.updateActiveNote({title ,content});
+                // 2. Call AppState.updateActiveNote({ title, content }).
+                const wordCount = content.trim() === ""? 0: content.trim().split(/\s+/).length;
+                const wordCountElement = document.getElementById("word-count");
+                wordCountElement.textContent = wordCount || 0;
+                 // 3. Update the word count (optional, but good for UI).
+            });
+            // Create an event listener for 'input' on both #note-title and #note-content.
+            // When input happens:
+
+            // Toolbar Actions
+            document.getElementById('btn-pin').addEventListener('click', () => {
+                if (AppState.activeNoteId) AppState.togglePin(AppState.activeNoteId);
+            });
+            document.getElementById('btn-trash').addEventListener('click', () => {
+                if (AppState.activeNoteId) AppState.trashNote(AppState.activeNoteId);
+            });
+            document.getElementById('btn-restore').addEventListener('click', () => {
+                if (AppState.activeNoteId) AppState.restoreNote(AppState.activeNoteId);
+            });
+            document.getElementById('btn-perm-delete').addEventListener('click', () => {
+                if (AppState.activeNoteId) AppState.permDelete(AppState.activeNoteId);
+            });
+
+            // Search
+            document.getElementById('search-input').addEventListener('input', (e) => {
+                AppState.searchQuery = e.target.value;
+                AppState.refreshUI();
+            });
+
+            // View Toggles
+            document.getElementById('view-notes').addEventListener('click', () => {
+                AppState.viewMode = 'active';
+                AppState.refreshUI();
+            });
+            document.getElementById('view-trash').addEventListener('click', () => {
+                AppState.viewMode = 'trash';
+                AppState.refreshUI();
+            });
+        });
+    </script>
+</body>
+</html>
