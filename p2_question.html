@@ -16,6 +16,7 @@
         .note-item:hover { transform: translateX(4px); }
         .note-item.active { border-left: 4px solid #3b82f6; background-color: #eff6ff; }
         #editor-content { min-height: 60vh; outline: none; }
+        .unsaved-banner { transition: all 0.2s ease; }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800 h-screen overflow-hidden font-sans">
@@ -109,6 +110,11 @@
                 </div>
             </div>
 
+            <!-- Unsaved / Save-failure banner (Issue 2) -->
+            <div id="unsaved-banner" class="unsaved-banner hidden px-6 py-2 bg-red-50 border-b border-red-200 text-red-600 text-xs font-semibold">
+                Could not save — storage limit exceeded. Your latest edit is shown but NOT persisted; it may be lost on refresh.
+            </div>
+
             <!-- Inputs -->
             <div class="flex-1 overflow-y-auto p-8 relative">
                 <input type="text" id="note-title" placeholder="Note Title" class="w-full text-3xl font-bold text-gray-800 placeholder-gray-300 border-none outline-none bg-transparent mb-4">
@@ -129,26 +135,37 @@
          */
         const Persistence = {
             COOKIE_NAME: 'cn_data_v1',
+            // Browsers commonly cap a single cookie around 4096 bytes for the
+            // *entire* "name=value; attributes" string, not just the value.
+            // We check the full cookie string (Issue 1) and keep a safety
+            // margin below the hard limit so we don't ride right up to the edge.
             MAX_SIZE: 4096,
+            SAFETY_MARGIN: 200,
 
             save: function(data) {
                 try {
-                    
-                    // TODO: 1. Convert 'data' (array of objects) into a JSON string
-                    // TODO: 2. Encode that string (Base64) to ensure cookie safety. (Hint: btoa + encodeURIComponent)
+                    // 1. Convert 'data' (array of objects) into a JSON string
+                    // 2. Encode that string (Base64) to ensure cookie safety.
                     const encodedData = btoa(encodeURIComponent(JSON.stringify(data)));
-                    // TODO: 3. Check the size. If > 4096 bytes, return { success: false, size: size }
-                    const size = encodedData.length;
-                    if (size > Persistence.MAX_SIZE){
-                        return {success : false , size : size };
-                    } 
-                    // TODO: 4. Set document.cookie with the name, value, and expiry.
+
+                    // 3. Build the *complete* cookie string (name + value + attributes)
+                    //    so the size check reflects what the browser actually stores,
+                    //    not just the encoded payload.
                     const expiryDate = new Date();
-                    expiryDate.setTime(expiryDate.getTime() + (30*24*60*60*1000)); // 1 month expiry
-                    document.cookie = `${Persistence.COOKIE_NAME}=${encodedData};expires=${expiryDate.toUTCString()};path=/`;
-                    
-                    //console.log("Persistence.save called (Not implemented yet)");
-                    return { success: true, size: size }; // Placeholder
+                    expiryDate.setTime(expiryDate.getTime() + (30 * 24 * 60 * 60 * 1000)); // 1 month expiry
+                    const cookieString = `${Persistence.COOKIE_NAME}=${encodedData};expires=${expiryDate.toUTCString()};path=/`;
+                    const size = cookieString.length;
+
+                    // Compare the full cookie string size against the limit, minus a
+                    // safety margin, so we fail before actually hitting the browser cap.
+                    if (size > Persistence.MAX_SIZE - Persistence.SAFETY_MARGIN) {
+                        return { success: false, size: size };
+                    }
+
+                    // 4. Set document.cookie with the name, value, and expiry.
+                    document.cookie = cookieString;
+
+                    return { success: true, size: size };
                 } catch (e) {
                     console.error("Save failed", e);
                     return { success: false, size: 0 };
@@ -156,17 +173,20 @@
             },
 
             load: function() {
-                // TODO: 1. Read document.cookie and extract the value for COOKIE_NAME
+                // 1. Read document.cookie and extract the value for COOKIE_NAME
                 const cookieValue = document.cookie.split(';').find(row => row.trim().startsWith(Persistence.COOKIE_NAME + '='));
-                // TODO: 2. If found, Decode (Base64) and Parse (JSON) it back into an array.
-                if (cookieValue){
-                    const decodedData = JSON.parse(decodeURIComponent(atob(cookieValue.split('=')[1])));
-                    return decodedData;
+                // 2. If found, Decode (Base64) and Parse (JSON) it back into an array.
+                if (cookieValue) {
+                    try {
+                        const decodedData = JSON.parse(decodeURIComponent(atob(cookieValue.split('=')[1])));
+                        return decodedData;
+                    } catch (e) {
+                        console.error("Failed to parse saved cookie data, starting fresh.", e);
+                        return [];
+                    }
                 }
-                // TODO: 3. Return the array of notes.
-                
-                //console.log("Persistence.load called (Not implemented yet)");
-                return []; // Placeholder return
+                // 3. Return the array of notes.
+                return [];
             }
         };
 
@@ -175,6 +195,7 @@
             activeNoteId: null,
             viewMode: 'active', // 'active' or 'trash'
             searchQuery: '',
+            hasUnsavedChanges: false, // Issue 2: tracks whether the last save() call failed
 
             init() {
                 this.notes = Persistence.load();
@@ -190,51 +211,40 @@
              */
             getFilteredNotes() {
                 let filtered = this.notes.filter(note => {
-                    // TODO: Filter logic
-                    if (this.viewMode === 'active' && note.deleted) return false;
                     // 1. If viewMode is 'active', only show notes where deleted === false
-                    if (this.viewMode === 'trash' && !note.deleted) return false;
+                    if (this.viewMode === 'active' && note.deleted) return false;
                     // 2. If viewMode is 'trash', only show notes where deleted === true
-                    if (this.searchQuery){
+                    if (this.viewMode === 'trash' && !note.deleted) return false;
+                    // 3. If searchQuery is not empty, check if title or content includes the query (case insensitive)
+                    if (this.searchQuery) {
                         const searchLower = this.searchQuery.toLowerCase();
-                        if(note.title.toLowerCase().includes(searchLower) || note.content.toLowerCase().includes(searchLower)){
+                        if (note.title.toLowerCase().includes(searchLower) || note.content.toLowerCase().includes(searchLower)) {
                             return true;
-                        }
-                        else {
+                        } else {
                             return false;
                         }
                     }
-                    // 3. If searchQuery is not empty, check if title or content includes the query (case insensitive)
-                    
-                    return true; // currently returns everything
+                    return true;
                 });
-                // TODO: Sorting logic
-                filtered.sort((a,b) =>{
 
-                // Return a sorted copy of the filtered array.
-                if (a.pinned && !b.pinned) {
-                    return -1; // a goes before b
-                }
-                else if (!a.pinned && b.pinned){
-                    return 1; //b goes before a
-                }
-                // Priority 1: Pinned notes go first.
-                else {
-                    if (a.updated > b.updated){
-                        return -1; //a goes before b
-                    }
-                    else if (a.updated === b.updated){
-                        return 0; //no change
-                    }
-                    else {
+                // Sorting logic: Priority 1 pinned first, Priority 2 newest 'updated' first.
+                filtered.sort((a, b) => {
+                    if (a.pinned && !b.pinned) {
+                        return -1; // a goes before b
+                    } else if (!a.pinned && b.pinned) {
                         return 1; // b goes before a
+                    } else {
+                        if (a.updated > b.updated) {
+                            return -1; // a goes before b
+                        } else if (a.updated === b.updated) {
+                            return 0; // no change
+                        } else {
+                            return 1; // b goes before a
+                        }
                     }
-                }
-                // Priority 2: Sort by 'updated' timestamp (newest first).
+                });
 
-                })
-
-                return filtered; 
+                return filtered;
             },
 
             getActiveNote() {
@@ -253,7 +263,7 @@
                 };
                 this.notes.push(newNote);
                 this.activeNoteId = newNote.id;
-                this.viewMode = 'active'; 
+                this.viewMode = 'active';
                 this.save();
                 this.refreshUI();
             },
@@ -264,9 +274,15 @@
 
                 Object.assign(note, updates);
                 note.updated = Date.now();
-                
+
                 this.save();
-                Render.updateListItem(note); 
+
+                // Issue 3 fix: the note's 'updated' timestamp just changed, which can
+                // change its correct sort position (newest-first). A partial update
+                // (updateListItem) only edits the existing DOM node in place and does
+                // NOT reorder it, so a re-sort is required to move it to the top of
+                // its group immediately, not just on the next full refresh.
+                Render.renderList();
                 Render.updateStatus();
             },
 
@@ -274,38 +290,28 @@
              * TODO SECTION 3: STATE ACTIONS
              */
             togglePin(id) {
-                
-                const idmatch = this.notes.find(note => note.id == id)
-                // TODO: Find the note by ID
-                if(idmatch){
-                    idmatch.pinned = !idmatch.pinned
-                    // TODO: Flip the 'pinned' boolean
-                    idmatch.updated = Date.now()
-                    // TODO: Update the 'updated' timestamp
-                    this.save()
-                    this.refreshUI()
-                    // TODO: Call this.save() and this.refreshUI()
+                const idmatch = this.notes.find(note => note.id == id);
+                if (idmatch) {
+                    idmatch.pinned = !idmatch.pinned;
+                    idmatch.updated = Date.now();
+                    this.save();
+                    this.refreshUI();
                 }
                 console.log("Toggle Pin ID:", id);
             },
 
             trashNote(id) {
-                const idmatch = this.notes.find(note => note.id == id)
-                // TODO: Find the note by ID
-                if(idmatch){
-                    idmatch.deleted = true
-                    // TODO: Set 'deleted' to true
-                    idmatch.pinned = false
-                    // TODO: Set 'pinned' to false (items in trash shouldn't be pinned)
-                    if(idmatch.id == this.activeNoteId){
-                        this.activeNoteId = null
+                const idmatch = this.notes.find(note => note.id == id);
+                if (idmatch) {
+                    idmatch.deleted = true;
+                    idmatch.pinned = false;
+                    if (idmatch.id == this.activeNoteId) {
+                        this.activeNoteId = null;
                     }
-                    // TODO: If the deleted note was the active one, set activeNoteId to null
-                    idmatch.updated = Date.now()
-                    this.save()
-                    this.refreshUI()
-                    // TODO: Call this.save() and this.refreshUI()
-                }  
+                    idmatch.updated = Date.now();
+                    this.save();
+                    this.refreshUI();
+                }
                 console.log("Trash ID:", id);
             },
 
@@ -320,21 +326,28 @@
             },
 
             permDelete(id) {
-                if(!confirm("Permanently delete this note?")) return;
+                if (!confirm("Permanently delete this note?")) return;
                 this.notes = this.notes.filter(n => n.id !== id);
                 if (this.activeNoteId === id) this.activeNoteId = null;
                 this.save();
                 this.refreshUI();
             },
 
+            // Issue 2 fix: surface save failures instead of silently keeping
+            // unsaved changes only in memory. We track hasUnsavedChanges and
+            // let Render show a persistent warning banner until a save succeeds.
             save() {
                 const result = Persistence.save(this.notes);
+                this.hasUnsavedChanges = !result.success;
                 Render.updateStorageMeter(result.size);
+                Render.updateUnsavedBanner(this.hasUnsavedChanges);
+                return result;
             },
 
             refreshUI() {
                 Render.renderList();
                 Render.renderEditor();
+                Render.updateUnsavedBanner(this.hasUnsavedChanges);
             }
         };
 
@@ -354,7 +367,8 @@
                 storageStatus: document.getElementById('storage-status'),
                 storageWarn: document.getElementById('storage-warning'),
                 viewNotes: document.getElementById('view-notes'),
-                viewTrash: document.getElementById('view-trash')
+                viewTrash: document.getElementById('view-trash'),
+                unsavedBanner: document.getElementById('unsaved-banner')
             },
 
             renderList() {
@@ -459,7 +473,21 @@
 
             updateStatus() {
                 const now = new Date();
-                this.els.lastSaved.textContent = `Saved: ${now.toLocaleTimeString()}`;
+                if (AppState.hasUnsavedChanges) {
+                    this.els.lastSaved.textContent = `Not saved (storage full)`;
+                } else {
+                    this.els.lastSaved.textContent = `Saved: ${now.toLocaleTimeString()}`;
+                }
+            },
+
+            // Issue 2: dedicated banner so a failed save is impossible to miss,
+            // instead of the UI silently showing content that was never persisted.
+            updateUnsavedBanner(show) {
+                if (show) {
+                    this.els.unsavedBanner.classList.remove('hidden');
+                } else {
+                    this.els.unsavedBanner.classList.add('hidden');
+                }
             },
 
             updateStorageMeter(sizeBytes) {
@@ -488,35 +516,22 @@
                 AppState.createNote();
             });
 
-            // TODO SECTION 4: INPUT EVENTS
-            // The following event listeners are MISSING.
-            document.getElementById('note-title').addEventListener('input' , ()=>{
+            // SECTION 4: INPUT EVENTS
+            document.getElementById('note-title').addEventListener('input', () => {
                 const title = document.getElementById('note-title').value;
                 const content = document.getElementById('note-content').value;
-                 // 1. Get the values from the DOM elements.
-                AppState.updateActiveNote({title ,content});
-                // 2. Call AppState.updateActiveNote({ title, content }).
-                const wordCount = content.trim() === ""? 0: content.trim().split(/\s+/).length;
-                const wordCountElement = document.getElementById("word-count");
-                wordCountElement.textContent = wordCount || 0;
-                 // 3. Update the word count (optional, but good for UI).
-                
+                AppState.updateActiveNote({ title, content });
+                const wordCount = content.trim() === "" ? 0 : content.trim().split(/\s+/).length;
+                document.getElementById("word-count").textContent = `${wordCount} word${wordCount !== 1 ? 's' : ''}`;
             });
-            // Create an event listener for 'input' on both #note-title and #note-content.
-            // When input happens:
-            document.getElementById('note-content').addEventListener('input' , ()=>{
+
+            document.getElementById('note-content').addEventListener('input', () => {
                 const title = document.getElementById('note-title').value;
                 const content = document.getElementById('note-content').value;
-                 // 1. Get the values from the DOM elements.
-                AppState.updateActiveNote({title ,content});
-                // 2. Call AppState.updateActiveNote({ title, content }).
-                const wordCount = content.trim() === ""? 0: content.trim().split(/\s+/).length;
-                const wordCountElement = document.getElementById("word-count");
-                wordCountElement.textContent = wordCount || 0;
-                 // 3. Update the word count (optional, but good for UI).
+                AppState.updateActiveNote({ title, content });
+                const wordCount = content.trim() === "" ? 0 : content.trim().split(/\s+/).length;
+                document.getElementById("word-count").textContent = `${wordCount} word${wordCount !== 1 ? 's' : ''}`;
             });
-            // Create an event listener for 'input' on both #note-title and #note-content.
-            // When input happens:
 
             // Toolbar Actions
             document.getElementById('btn-pin').addEventListener('click', () => {
